@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Runs — logs only. Saves and eval artifacts are tracked.
+saves/*.log
+saves/checkpoints_intermediate/
+
+# Do not upload multi-hundred-MB intermediate checkpoints; the final one is enough
+saves/pong_dqn_2*.pt
+saves/pong_dqn_1[0-4]*.pt
+!saves/pong_dqn_final.pt
+
+# Colab noise
+.ipynb_checkpoints/
