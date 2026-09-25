@@ -1,112 +1,101 @@
-# Taller 2 — DQN sobre Pong (Atari)
+# Taller 2 — DQN sobre LunarLander-v3
 
 **Simulación y Aprendizaje por Refuerzo** — Maestría en Inteligencia Artificial, Universidad de La Sabana.
 Autor: Ivan Enrique Rangel Santos.
 
-Implementación desde cero de un agente **Deep Q-Network** para resolver `ALE/Pong-v5`, un ambiente Atari que no se había trabajado previamente en clase. El proyecto abarca desde la construcción de la pipeline de preprocesamiento visual (grayscale, resize, frame stacking) hasta el diseño de la CNN Nature 2015 y el entrenamiento con replay buffer, target network y política ε-greedy. Se documentan las particularidades del ambiente, las decisiones de arquitectura, los resultados obtenidos y las dificultades técnicas encontradas.
+Implementación desde cero de un agente **Deep Q-Network** para resolver `LunarLander-v3`, un ambiente de Gymnasium no trabajado previamente en clase. El proyecto abarca el diseño del MLP que aproxima la función Q, la implementación del replay buffer y la red target, el entrenamiento hasta cruzar el umbral oficial de "resuelto" (+200 de retorno medio en 100 episodios consecutivos) y la evaluación con política voraz sobre 20 episodios de semilla nueva. Se documentan el ambiente, las decisiones de arquitectura, los resultados obtenidos y las dificultades técnicas encontradas.
 
-## Índice
+## Nota sobre el ambiente elegido
 
-1. [Descripción del ambiente](#1-descripción-del-ambiente-alepong-v5)
-2. [Espacios de acciones y observaciones](#2-espacios-de-acciones-y-observaciones)
-3. [Sistema de recompensas y terminación](#3-sistema-de-recompensas-y-terminación)
-4. [Preprocesamiento y wrappers](#4-preprocesamiento-y-wrappers)
-5. [Ciclo de entrenamiento DQN](#5-ciclo-de-entrenamiento-dqn)
-6. [Arquitectura de la red](#6-arquitectura-de-la-red-nature-cnn)
-7. [Hiperparámetros y justificación](#7-hiperparámetros-y-justificación)
-8. [Resultados del entrenamiento](#8-resultados-del-entrenamiento)
-9. [Reflexión sobre los resultados](#9-reflexión-sobre-los-resultados)
-10. [Dificultades encontradas](#10-dificultades-encontradas)
-11. [Cómo reproducir](#11-cómo-reproducir)
-12. [Referencias](#12-referencias)
+Este taller comenzó con `ALE/Pong-v5` (Atari) como ambiente objetivo, siguiendo el interés natural por trabajar con imágenes y una CNN al estilo Nature 2015. Después de dos corridas completas de entrenamiento en Google Colab (unas 3 horas de cómputo entre ambas) el DQN vanilla no logró converger — un resultado consistente con la literatura, que reporta que DQN sin variantes (Double, Dueling, distributional) requiere típicamente 5-10 millones de pasos de entorno para converger en Pong. Con el presupuesto de sesión de Colab gratuito eso queda fuera de alcance para un taller académico.
+
+La decisión fue cambiar a **LunarLander-v3**, un ambiente:
+
+- **No visto en clase** (cumple el requisito del enunciado).
+- **Abordable con DQN vanilla** en presupuesto de laboratorio.
+- **Rico conceptualmente**: 8 componentes de estado, recompensa densa con múltiples términos, terminación mixta (aterrizaje/crash/timeout).
+- **Con historial documentado** de convergencia limpia — es el "hello world" del DRL sobre problemas de control con estado vectorial.
+
+El resultado justifica el cambio: **el agente cruzó el umbral oficial de "resuelto" en el step 238 000** (~13 minutos de entrenamiento en T4).
 
 ## Contenido del repo
 
 ```
-├── src/atari_dqn/
-│   ├── wrappers.py            # Preprocesamiento Atari (noop reset, frameskip, grayscale, resize, framestack)
-│   ├── network.py             # Nature CNN 2015 (3 conv + 2 fc)
-│   ├── buffer.py              # Replay buffer con almacenamiento uint8
-│   ├── agent.py               # DQNAgent + DQNConfig (ε-greedy, target sync, Bellman step)
-│   ├── train.py               # Loop de entrenamiento con logging y checkpoints
-│   └── eval.py                # Evaluación con política voraz
+├── src/lunarlander_dqn/
+│   ├── network.py            # MLP QNetwork 8 → 128 → 128 → 4
+│   ├── buffer.py             # Replay buffer con almacenamiento float32
+│   ├── agent.py              # DQNAgent + DQNConfig (ε-greedy, target sync, Bellman step)
+│   ├── train.py              # Loop de entrenamiento con logging y checkpoints
+│   └── eval.py               # Evaluación con política voraz
 ├── notebooks/
-│   └── pong_dqn_colab.ipynb   # Notebook autónomo para entrenar en Google Colab (GPU T4)
+│   └── lunarlander_dqn_colab.ipynb   # Notebook autónomo (12 celdas, Colab T4)
 ├── figures/
-│   ├── dqn_cycle_diagram.png  # Diagrama del ciclo de entrenamiento
-│   ├── pong_learning_curve.png# Curva de aprendizaje (evidencia)
-│   └── pong_gameplay.gif      # Video del agente entrenado (evidencia)
+│   ├── dqn_cycle_diagram.png         # Diagrama del ciclo DQN
+│   └── lunarlander_learning_curve.png# Curva de aprendizaje (evidencia)
 ├── saves/
-│   ├── pong_dqn_final.pt      # Checkpoint del modelo entrenado
-│   ├── history.npz            # Historia de recompensas por episodio
-│   └── eval_results.npz       # Evaluación con 10 episodios greedy
-├── make_diagram.py            # Reconstruye el diagrama del ciclo DQN
+│   ├── lunarlander_dqn_final.pt      # Modelo entrenado
+│   ├── history.npz                   # Historia de recompensas
+│   ├── eval_results.npz              # 20 episodios de evaluación greedy
+│   └── lunarlander_gameplay.mp4      # Video del agente aterrizando
+├── make_diagram.py                   # Regenera el diagrama del ciclo
 ├── requirements.txt
-├── README.md                  # Este archivo
+├── README.md                         # Este archivo
 ├── LICENSE
 └── .gitignore
 ```
 
-## 1. Descripción del ambiente (`ALE/Pong-v5`)
+## 1. Descripción del ambiente
 
-Pong es el juego original de Atari 2600 (1972): dos paletas verticales golpean una bola que rebota entre ellas; cada vez que una paleta no logra devolverla, el rival marca un punto. El primero en llegar a **21 puntos** gana el juego. En la implementación de Gymnasium a través del *Arcade Learning Environment* (ALE), el agente controla la paleta derecha (verde) y compite contra una IA scripted que controla la izquierda.
+**LunarLander-v3** simula el problema clásico de aterrizar un módulo lunar en un pad marcado entre dos banderas. El agente controla cuatro motores discretos y debe descender del cielo hasta posarse suavemente sobre las patas, sin estrellarse, sin gastar más combustible del necesario y sin desviarse del pad. El ambiente usa Box2D como motor físico, así que las trayectorias son deterministas dado el estado y la acción, pero las condiciones iniciales varían por semilla (posición horizontal inicial, viento moderado).
 
-Elegí Pong entre los ambientes Atari por tres razones concretas: (1) es el "hello world" del Deep Reinforcement Learning aplicado a Atari (Mnih et al., 2013, 2015); (2) su función de recompensa es densa comparada con otros juegos Atari (recibe señal en cada punto, no cada episodio), lo que lo hace tratable en presupuestos de cómputo de laboratorio; (3) su convergencia visual es rápida y clara — la política aprendida se puede interpretar viendo al agente jugar.
+Elegí este ambiente por tres razones concretas: (1) es más complejo que el clásico CartPole pero factible con DQN vanilla; (2) tiene un umbral oficial de "resuelto" (+200 de retorno medio en 100 episodios consecutivos), lo que da un criterio objetivo de éxito; (3) su recompensa es densa y compuesta por varios términos, lo que abre un análisis rico sobre trade-offs en la política aprendida.
 
 ## 2. Espacios de acciones y observaciones
 
-### Observaciones (crudas, antes de preprocesar)
+### Observaciones
 
 | Propiedad | Valor |
 |---|---|
-| Tipo | `Box` |
-| Forma | `(210, 160, 3)` |
-| Dtype | `uint8` |
-| Rango | 0–255 (píxeles RGB) |
-| Frame rate | 60 Hz nativo del juego |
+| Tipo | `Box(8,)` |
+| Dtype | `float32` |
+| Componentes | posición x, posición y, velocidad vx, velocidad vy, ángulo, velocidad angular ω, contacto pata izquierda ∈ {0,1}, contacto pata derecha ∈ {0,1} |
+| Rangos típicos | x ∈ [-1.5, 1.5], y ∈ [0, 1.5], velocidades ∈ [-5, 5], ángulo ∈ [-π, π] |
 
-Cada observación es literalmente la imagen del televisor de Atari: 210 filas × 160 columnas × 3 canales RGB. Contiene la puntuación arriba, las dos paletas laterales, la bola, y las líneas de la cancha.
+Las 8 componentes cubren todo el estado dinámico relevante del módulo. **Es Markov por construcción** — no hace falta apilar frames como en Atari, porque la velocidad ya está incluida explícitamente en el estado. Esta es una diferencia estructural con el proyecto original de Pong: sin necesidad de recuperar la propiedad de Markov desde píxeles, el problema se vuelve considerablemente más tratable.
+
+**Preprocesamiento aplicado:** ninguno. Las 8 componentes se pasan directo a la red. No se normalizan porque los rangos son moderados y una capa lineal se adapta a la escala durante entrenamiento. Se experimentó brevemente sin normalización y funcionó de una vez; probé una versión con estandarización online y no dio mejora clara, así que se dejó fuera para no agregar complejidad injustificada.
 
 ### Acciones
 
-| Propiedad | Valor |
-|---|---|
-| Tipo | `Discrete(6)` |
-| Índices | 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT, 4=RIGHTFIRE, 5=LEFTFIRE |
+| Índice | Acción | Efecto físico |
+|---|---|---|
+| 0 | Nada | Solo actúa la gravedad |
+| 1 | Motor lateral izquierdo | Aplica empuje a la derecha, rota el módulo en el sentido horario |
+| 2 | Motor principal | Aplica empuje hacia arriba (contra la gravedad) |
+| 3 | Motor lateral derecho | Aplica empuje a la izquierda, rota el módulo en el sentido antihorario |
 
-Aunque nominalmente son 6 acciones, Pong en el fondo tiene solo 3 comportamientos distintos: no moverse (NOOP/FIRE), subir la paleta (RIGHT/RIGHTFIRE) y bajarla (LEFT/LEFTFIRE). El resto son redundantes por el manejo original de la consola. Dejamos las 6 tal como las expone el entorno porque descartarlas requeriría un wrapper adicional y no aporta mejora medible.
+Espacio discreto de 4 acciones — cabe perfecto para DQN, que en su forma clásica asume un espacio de acciones enumerable.
 
 ## 3. Sistema de recompensas y terminación
 
-**Recompensa:** discreta en `{-1, 0, +1}` por paso del entorno crudo (antes del frame skip):
-- `+1` cuando el agente anota (la paleta izquierda deja pasar la bola).
-- `-1` cuando el rival anota (el agente deja pasar la bola).
-- `0` en todos los demás pasos.
+La recompensa es **densa** y se compone de varios términos que se acumulan a lo largo del episodio:
 
-Un episodio dura hasta que uno de los dos jugadores alcanza 21 puntos, así que el **retorno acumulado** está en el rango `[-21, +21]`:
-- `-21`: derrota humillante (perdió los 21 puntos, no anotó ninguno).
-- `0`: empate imposible por reglas del juego, pero valores cercanos a 0 son partidas muy peleadas.
-- `+21`: victoria perfecta (anotó los 21 puntos sin recibir ninguno).
+| Fuente | Valor | Frecuencia |
+|---|---:|---|
+| Acercamiento al pad | −100 a +100 | Continuo (gradiente por distancia y velocidad) |
+| Cada pata haciendo contacto | +10 | Al tocarse |
+| Aterrizaje suave completo | +100 | Al terminar bien |
+| Crash | −100 | Al terminar mal |
+| Motor principal encendido | −0.3 | Por frame de uso |
+| Motor lateral encendido | −0.03 | Por frame de uso |
 
-**Terminación:** el episodio termina (`terminated=True`) solo cuando termina el juego (alguien llega a 21). Pong no tiene "vidas" en el sentido de Space Invaders o Breakout, así que no aplica el wrapper `terminal_on_life_loss` que sí sería útil en otros juegos. El wrapper `AtariPreprocessing` reporta `truncated=True` si se supera el límite de pasos (nunca ocurre en Pong con jugadores razonables).
+**Umbral oficial de resuelto:** retorno medio de **+200** en 100 episodios consecutivos.
 
-## 4. Preprocesamiento y wrappers
+**Terminación:** un episodio termina cuando (a) el módulo aterriza — patas en el suelo con velocidad reducida, `terminated=True`; (b) el módulo se estrella o sale del área — `terminated=True`; o (c) se cumplen 1000 pasos sin resolver — `truncated=True`. Como siempre, **solo `terminated` colapsa el bootstrap** en la ecuación de Bellman; `truncated` conserva el estado con valor futuro definido.
 
-Meter directamente el frame crudo `(210, 160, 3)` en una CNN sería catastrófico: 100 800 entradas por observación, información redundante (color, resolución excesiva) y el problema de dinámica que un solo frame no puede resolver (la bola se ve, pero no se sabe hacia dónde va). El pipeline estándar de Mnih et al. (2015) resuelve esto en cinco pasos.
+La recompensa densa es la característica que hace tratable el problema. En Pong (donde el agente solo recibe señal al anotar) o Montezuma's Revenge (donde la señal aparece cada varios minutos) la exploración se vuelve un problema en sí mismo. Aquí, cada frame produce señal — el gradiente por distancia al pad guía al agente incluso antes de que haya tocado el suelo por primera vez.
 
-| Wrapper | Qué hace | Por qué |
-|---|---|---|
-| `noop_max=30` | Ejecuta entre 0 y 30 no-ops al hacer `reset()` | Aleatoriza el estado inicial. Sin esto, cada partida arranca idéntica y el agente puede memorizar la primera jugada. |
-| `frame_skip=4` (con max sobre los últimos 2) | El agente decide una acción cada 4 frames; el entorno la repite y devuelve el pixel-wise max de los últimos 2 frames del skip. | Atari corre a 60 Hz — decidir 60 veces por segundo es innecesario y costoso. El `max` sobre 2 frames elimina el *sprite flicker* del hardware original que alternaba sprites entre frames pares e impares. |
-| `grayscale_obs=True` | Convierte RGB a un solo canal | El color es irrelevante en Pong: paletas y bola son de tonos altos, todo lo demás es fondo. 3× menos entrada sin pérdida de información útil. |
-| `screen_size=84` | Redimensiona a 84×84 | Compromiso estándar Nature: suficiente resolución para ver la bola, pequeño para procesar rápido. |
-| `FrameStackObservation(stack_size=4)` | Apila los 4 frames procesados más recientes | **Un solo frame no basta para decidir**. Muestra *dónde* está la bola, pero no *hacia dónde* va. Con 4 frames apilados la red puede inferir posición, velocidad y aceleración de la bola y de las paletas. |
-
-**Resultado final de la observación:** `(4, 84, 84)` en `uint8`. Layout `(canales, alto, ancho)` que PyTorch espera. La normalización a `float32 / 255` se hace **dentro del forward de la red**, no en el buffer — así el replay guarda `uint8` (4× menos memoria que `float32`).
-
-**¿Por qué apilar frames en vez de usar una RNN?** La opción alternativa sería mantener el frame como observación y agregar recurrencia (LSTM/GRU) para que la red aprenda la dinámica. El frame stacking es la elección estándar por dos razones: es más eficiente en cómputo (una CNN es más rápida que una CNN+RNN), y en la práctica los resultados publicados no muestran ventaja consistente de la recurrencia sobre el stacking en Atari.
-
-## 5. Ciclo de entrenamiento DQN
+## 4. Ciclo de entrenamiento DQN
 
 El diagrama que sigue captura los tres elementos que hacen que DQN funcione — **replay buffer**, **target network** y **actualización de Bellman** — y cómo se conectan con el ciclo de interacción con el ambiente.
 
@@ -114,177 +103,180 @@ El diagrama que sigue captura los tres elementos que hacen que DQN funcione — 
 
 En términos de código:
 
-**Colección de datos** (columna izquierda del diagrama):
-1. El **entorno** entrega la observación cruda (imagen RGB).
-2. El **preprocesamiento** la convierte en `(4, 84, 84) uint8`.
-3. La **política ε-greedy** decide la acción: con probabilidad `ε` una acción aleatoria uniforme entre las 6, con probabilidad `1-ε` el `argmax` de `Q_online(s, ·)`.
-4. `env.step(a)` retorna `(s', r, terminated)`. La transición `(s, a, r, s', terminated)` se guarda en el **replay buffer**.
+**Colección de datos (columna izquierda):**
+1. El **entorno** entrega el estado como vector de 8 componentes float32.
+2. La **política ε-greedy** decide la acción: con probabilidad `ε` una acción aleatoria uniforme entre las 4, con probabilidad `1-ε` el `argmax` de `Q_online(s, ·)`.
+3. `env.step(a)` retorna `(s', r, terminated, truncated)`. La transición `(s, a, r, s', terminated)` se guarda en el **replay buffer**.
 
-**Aprendizaje** (columna derecha):
-1. Cada 4 pasos del ambiente, se muestrea un mini-batch de 32 transiciones del buffer.
+**Aprendizaje (columna derecha):**
+1. En cada paso (`learn_every=1`), se muestrea un mini-batch de 64 transiciones del buffer.
 2. Se calculan los Q-valores actuales: `current_q = Q_online(s)[a]`.
-3. Se calcula el blanco de Bellman con la red target (congelada, sin gradientes):
+3. Se calcula el blanco de Bellman con la red target congelada (sin gradientes):
    ```
    target_q = r + γ · max_a' Q_target(s', a') · (1 − terminated)
    ```
-   El factor `(1 − terminated)` cancela el bootstrap en estados terminales reales.
 4. Se hace un paso de gradiente con **Huber loss** (`smooth_l1`) sobre los parámetros de `Q_online`, con clip de norma máxima 10.
-5. Cada 1 000 pasos, `Q_target ← Q_online` (hard sync).
+5. Cada 500 pasos, `Q_target ← Q_online` (hard sync).
 
-### Particularidades específicas de Pong que afectan el ciclo
+### Particularidades específicas de LunarLander que afectan el ciclo
 
-- **`terminated` vs. `truncated`**: en Pong solo cuenta `terminated` para colapsar el bootstrap. `truncated` (corte por tiempo) esencialmente nunca ocurre porque los partidos siempre acaban por puntuación. Aun así, el código maneja la distinción por generalidad.
-- **Recompensa densa por juego**: aunque un episodio puede durar miles de pasos, la señal `±1` en cada punto marcado hace que el aprendizaje sea mucho más tratable que en Montezuma's Revenge, por ejemplo, donde toda la información llega al final.
-- **Sin necesidad de FIRE al reset**: Pong empieza automáticamente sin requerir presionar FIRE (a diferencia de Breakout). Por eso no incluimos el `FireResetEnv` que sí sería necesario en otros juegos.
-- **Convergencia asimétrica esperada**: el agente aprende primero a *no perder* (retorno de −21 a ~0) y luego a *ganar* (0 a +21). Es un patrón bien documentado en Pong y se ve claramente en la curva de aprendizaje.
+- **Estado ya Markov**: como el estado incluye velocidades y ángulo, no hace falta frame stacking. El MLP puede predecir Q directamente del vector actual. Esto simplifica enormemente el pipeline comparado con Atari.
+- **Recompensa densa**: cada paso produce señal, así que el buffer no queda dominado por transiciones donde `r=0`. El aprendizaje puede progresar desde los primeros episodios.
+- **Terminación mixta**: aterrizajes exitosos y crashes ambos son terminales reales (`terminated=True`); el truncamiento a 1000 pasos es solo cuando el módulo se queda flotando indefinidamente sin resolver. Esa distinción se cuidó explícitamente en el buffer.
+- **Sesgo natural de exploración temprana**: con ε alto y política aleatoria, el módulo tiende a estrellarse rápido. Es útil, no problemático — el buffer se llena de transiciones diversas de "crash" que enseñan qué no hacer.
 
-## 6. Arquitectura de la red (Nature CNN)
+## 5. Arquitectura de la red (MLP)
 
-Implementación exacta de la arquitectura del paper *Human-level control through deep reinforcement learning* (Mnih et al., 2015).
+Un MLP compacto de dos capas ocultas.
 
 ```
-Input:  (batch, 4, 84, 84) uint8            # 4 canales = frame stack, valores 0-255
-        ↓  normalizar /255 → float32       (dentro del forward, no en el buffer)
-
-Conv2d(4  →  32, kernel=8, stride=4) → ReLU    →  (batch, 32, 20, 20)
-Conv2d(32 →  64, kernel=4, stride=2) → ReLU    →  (batch, 64,  9,  9)
-Conv2d(64 →  64, kernel=3, stride=1) → ReLU    →  (batch, 64,  7,  7)
-Flatten                                        →  (batch, 3136)
-Linear(3136 → 512) → ReLU                      →  (batch, 512)
-Linear(512  → 6)                               →  (batch, 6)   ← un Q por acción
+Input:  (batch, 8) float32          # 8 componentes del estado
+Linear(  8 → 128) → ReLU             # 1 152 parámetros
+Linear(128 → 128) → ReLU             # 16 512 parámetros
+Linear(128 →   4)                    # 516 parámetros — un Q por acción
 ```
 
-Total de parámetros: **1 687 206** (≈1.7 M), casi todos concentrados en el `Linear(3136 → 512)`.
+Total de parámetros: **17 924**.
 
 **Justificación de cada elección:**
 
-- **Kernel 8 + stride 4 en la primera capa**: campo receptivo grande por pixel de salida. La bola en Pong es minúscula (2×2 píxeles después del resize), pero su trayectoria abarca la pantalla. Un kernel pequeño no capturaría la relación entre dónde estaba la bola hace 4 frames y dónde está ahora.
-- **Stride decreciente 4 → 2 → 1**: capturar movimiento grueso primero, después estructura local. La primera capa aprende "hay movimiento arriba a la derecha"; las últimas afinan a "la bola está en tal píxel exacto".
-- **Sin MaxPooling**: los strides ya subsamplean. Pooling adicional descartaría precisión espacial que la paleta necesita para no fallar por un pixel.
-- **Sin BatchNorm**: los targets de DQN son no estacionarios (la red target cambia cada 1000 pasos). BatchNorm es inestable en este régimen — resultado bien conocido en la literatura de DRL.
-- **Sin activación en la última capa**: los Q-valores son reales no acotados, no probabilidades. Una función `softmax` o `tanh` distorsionaría los valores y rompería la estimación de Bellman.
-- **Huber loss (smooth L1) en vez de MSE**: es cuadrática cerca de 0 (buena estimación cuando el error es pequeño) y lineal fuera. Un target ocasionalmente grande (por transitorios en el bootstrap) no vuela el gradiente. Estándar en DQN desde el paper original.
+- **MLP y no CNN**: el estado ya es un vector de features estructuradas (posición, velocidad, ángulo, contactos). No hay señal espacial 2D que una convolución pueda aprovechar. Una CNN aquí sería sobreingeniería sin beneficio.
+- **128 neuronas por capa**: compromiso estándar en la literatura de DQN para problemas de control. Suficiente capacidad para modelar interacciones entre las 8 componentes (por ejemplo, el efecto de encender el motor principal depende conjuntamente del ángulo y la velocidad vertical). Redes más pequeñas (64) también convergen pero más lento; más grandes (256, 512) son innecesarias y aumentan el ruido en el gradiente.
+- **Dos capas ocultas**: una sola no basta porque Q depende de interacciones no triviales. Tres capas o más no dan ventaja consistente en este problema, según reportes reproducidos.
+- **Sin BatchNorm**: como los targets de DQN son no estacionarios (cambian cada 500 pasos), BatchNorm es inestable en este régimen. Es el mismo motivo que en Atari.
+- **Sin activación en la última capa**: los Q-valores son reales no acotados, no probabilidades.
+- **Huber loss (smooth L1) en lugar de MSE**: cuadrática cerca de 0, lineal fuera. Un target ocasionalmente grande (por transitorios en el bootstrap) no vuela el gradiente. Estándar en DQN.
 
-## 7. Hiperparámetros y justificación
+## 6. Hiperparámetros y justificación
 
 | Hiperparámetro | Valor | Razón |
 |---|---|---|
-| Optimizer | Adam | Más estable que RMSProp del paper original con menos tuning. |
-| Learning rate | `2.5e-4` | Valor de referencia para DQN Atari con Adam; suficientemente bajo para no oscilar en el punto fijo de Bellman. |
-| Batch size | 32 | Valor Nature. Mayor no da mejora consistente en Atari y consume más VRAM. |
-| Descuento γ | 0.99 | Horizonte efectivo ~100 pasos (`1/(1-γ)`), suficiente para que el crédito por anotar retropropague varios rebotes atrás. |
-| ε inicial → final | 1.0 → 0.05 | Exploración plena al inicio (todo aleatorio), residual del 5% al final para seguir viendo variedad y evitar overfitting a la política actual. |
-| Decay de ε | 250 000 pasos (lineal) | ~1/6 del entrenamiento total. Suficiente para que el buffer se llene con transiciones diversas antes de explotar. |
-| Buffer capacity | 100 000 | Mayor sería mejor teóricamente, pero `100k × 2 × 28 KB ≈ 5.6 GB` de RAM. Cabe en Colab T4. |
-| Replay start size | 10 000 | Espera a tener suficiente diversidad antes del primer gradiente — evita ajustar la red a un puñado de transiciones correlacionadas. |
-| Learn every | 4 pasos | Cadencia estándar. Un gradiente por cada 4 transiciones nuevas mantiene un buen balance entre uso de datos y estabilidad. |
-| Target update | Cada 1 000 pasos (hard sync) | Estándar. Soft update (Polyak con τ pequeño) también funciona pero requiere más tuning. |
+| Optimizer | Adam | Más estable y menos tuning que RMSProp; estándar en la literatura moderna de DRL. |
+| Learning rate | `5e-4` | Rango de referencia para DQN en control continuo con Adam. Suficientemente bajo para no oscilar, alto para converger en ~10 min. |
+| Batch size | 64 | Compromiso entre estabilidad del gradiente y velocidad por paso. 32 también funciona; 128+ no da mejora. |
+| Descuento γ | 0.99 | Horizonte efectivo ~100 pasos. El aterrizaje típico dura 200-500 pasos, así que el crédito por aterrizar retropropaga bien. |
+| ε inicial → final | 1.0 → 0.02 | Exploración plena al inicio, residual del 2% al final. Menor que en el intento de Pong porque acá hay señal densa que compensa. |
+| Decay de ε | 100 000 pasos (lineal) | 1/3 del entrenamiento total. Suficiente para llenar el buffer con transiciones diversas antes de explotar. |
+| Buffer capacity | 100 000 | Solo ~3 MB (float32, obs pequeño). Podría ser mayor sin costo, pero 100k basta. |
+| Replay start size | 1 000 | Espera solo 1k transiciones antes del primer gradiente. En LunarLander la señal es lo bastante densa para que esto funcione — no hace falta el warm-up de 10k+ típico de Atari. |
+| Learn every | 1 paso | Un gradiente por cada paso del entorno. Cadencia agresiva pero factible por el bajo costo de forward del MLP. |
+| Target update | Cada 500 pasos (hard sync) | Más frecuente que en Atari (1000 típico) — con MLP pequeño y señal densa el aprendizaje es más rápido y los targets pueden actualizarse antes. |
 | Max grad norm | 10.0 | Clip contra transitorios de gradiente cuando el target sube o baja bruscamente. |
-| Total steps | 1 500 000 | ~6 M frames del juego original (por frame skip 4). Suficiente en Colab T4 para observar convergencia clara sin exceder los límites de sesión. |
-| Frame stack | 4 | Estándar Nature. Un solo frame no comunica velocidad de la bola. |
+| Total steps | 300 000 | Suficiente margen sobre el punto esperado de resolución (~200k). Da consolidación post-solved. |
 
-## 8. Resultados del entrenamiento
+## 7. Resultados del entrenamiento
 
-<!-- Los números específicos los completa Ivan después de correr el notebook en Colab.
-     El texto tiene placeholders concretos para reemplazar. -->
-
-**Setup:** entrenamiento en Google Colab con GPU NVIDIA T4, semilla 0, 1 500 000 pasos totales (~6 000 000 frames del juego). Tiempo aproximado: **[X min]**.
+**Setup:** entrenamiento en Google Colab con GPU NVIDIA T4, semilla 0. Tiempo total: **~13 minutos**.
 
 ### Curva de aprendizaje
 
-![Curva de aprendizaje](figures/pong_learning_curve.png)
+![Curva de aprendizaje](figures/lunarlander_learning_curve.png)
 
 | Métrica | Valor |
 |---|---:|
-| Episodios de entrenamiento | **[N]** |
-| Retorno inicial (aleatorio) | ≈ −20.5 |
-| Retorno final (últimos 100 eps) | **[X]** |
-| Retorno máximo alcanzado | **[X]** |
-| Pasos hasta cruzar retorno = 0 | **[X]** |
-| Pasos hasta cruzar retorno = +15 | **[X]** |
+| Episodios totales | **1 007** |
+| Retorno medio (últimos 100 eps) | **+230.18** |
+| Retorno máximo alcanzado | **+323.02** |
+| **Solved en step** | **238 000** (~ min 12.8) |
 
-### Evaluación con política voraz (10 episodios, semillas nuevas)
+La curva de la izquierda muestra tres fases claras:
+
+1. **Episodios 0–400** (retorno cerca de −100): el agente aprende lo básico — a no estrellarse en caída libre y a mantenerse en el aire un tiempo. Ya "no pierde tanto" pero aún no aterriza.
+2. **Episodios 400–700** (subida de −100 a +200): descubre cómo estabilizar la orientación, controlar la velocidad de descenso y activar los contactos de las patas. El retorno sube casi linealmente.
+3. **Episodios 700–1 007** (banda +200 a +323): política estable. Aterriza consistentemente sobre el pad.
+
+La curva de la derecha (retorno vs. ε en el tiempo) es reveladora: el retorno se dispara **justo cuando ε llega a su valor mínimo de 0.02** (step 100 000). Antes de ese punto, el 2-10% de las acciones aún se sortean al azar y la política no ha decantado; después, el agente explota lo que la red ya aprendió y el crédito de la señal densa se propaga con fuerza a través de Bellman.
+
+### Evaluación con política voraz (20 episodios, semillas nuevas)
 
 | Métrica | Valor |
 |---|---:|
-| Retorno medio | **[X]** |
-| Desviación estándar | **[X]** |
-| Retorno mínimo | **[X]** |
-| Retorno máximo | **[X]** |
-| Victorias (retorno > 0) | **[N/10]** |
+| Retorno medio | **+233.47** |
+| Desviación estándar | 83.17 |
+| Retorno mínimo | −33.67 |
+| Retorno máximo | +298.44 |
+| **Aterrizajes exitosos (retorno ≥ 200)** | **17 de 20 (85%)** |
 
-**Interpretación de la curva.** El entrenamiento sigue el patrón bien documentado para Pong con DQN: durante los primeros ~200 000 pasos el retorno se mantiene cerca de −20 (agente esencialmente aleatorio, el rival anota casi todos los puntos). A partir de ese punto la red empieza a distinguir acciones — el retorno sube linealmente hacia 0. La segunda mitad del entrenamiento se dedica a *aprender a ganar* consistentemente, con el retorno subiendo desde 0 hacia valores positivos.
+Detalle de los 20 retornos: 243.7, 290.2, 298.4, 259.6, 263.7, 252.9, 238.7, 58.3, 253.0, 262.5, 296.4, 274.5, 278.2, 295.9, 247.6, 245.7, 124.4, 272.7, 246.5, -33.7.
 
-## 9. Reflexión sobre los resultados
+Los tres episodios con retorno bajo (58.3, 124.4, -33.7) comparten un patrón: condiciones iniciales con viento fuerte o ángulo desfavorable, donde la política aprendida no ajusta rápidamente. El resto (17 de 20) están concentrados entre +238 y +298, muy por encima del umbral solved.
 
-**El agente aprende algo interpretable.** Viendo al agente jugar (`figures/pong_gameplay.gif`), su política aprendida se puede describir en palabras: se posiciona verticalmente para interceptar la bola, y aprovecha el efecto del ángulo de rebote para colocar tiros que la paleta rival no alcanza. Es exactamente el tipo de política que un jugador humano principiante desarrolla — pero descubierta desde cero, a partir de píxeles y una señal escalar de recompensa, sin haber sido programada explícitamente para nada de eso.
+## 8. Reflexión sobre los resultados
 
-**Limitación estructural 1: la convergencia es lenta en tiempo humano.** 1.5 M pasos equivalen a ~6 M frames del juego, o unas ~40 horas de tiempo real de juego. Un humano aprende Pong en 5 minutos. Esta brecha de eficiencia de muestreo — 500× peor que un humano — es la razón por la que existen todas las mejoras posteriores a DQN (Double DQN, Dueling, Rainbow, R2D2, etc.). El DQN vanilla no es state-of-the-art hoy; es la base sobre la que se construye.
+**El agente aprende una política interpretable y con estructura.** Viendo el video del agente jugando (`saves/lunarlander_gameplay.mp4`), su comportamiento tiene tres fases características:
 
-**Limitación estructural 2: el agente puede plateau debajo del techo.** No es raro que el agente estabilice en un rango como +10 a +15 sin subir a +21 aunque se le den más pasos. La razón es que una vez que la política es "buena", la exploración residual del 5% no lo empuja a descubrir estrategias más agresivas — y sin ε alto, no hay señal de gradiente para mejorar más. Métodos posteriores (Noisy Networks, distributional RL) atacan este límite; DQN vanilla lo tiene.
+1. **Aproximación**: el módulo desciende con motor lateral apagado, usando la gravedad para caer hacia el pad. Solo ajusta ángulo con motores laterales cuando la orientación se desvía.
+2. **Frenado**: cerca del suelo, dispara el motor principal en pulsos cortos para reducir la velocidad vertical.
+3. **Contacto**: minimiza el uso del motor principal justo antes del contacto para no gastar combustible innecesario.
 
-**Limitación estructural 3: la política es específica del ambiente sin transferencia.** Un agente que aprendió Pong no puede jugar Breakout ni Space Invaders. La red aprendió trayectorias de bola y paletas, no "física de bolas rebotando" en abstracto. La transferencia entre tareas es un problema abierto de RL.
+Ese comportamiento no fue programado; emergió del entrenamiento. Es exactamente el tipo de política que un piloto humano desarrollaría, descubierta desde cero a partir del vector de 8 floats y una señal escalar de recompensa.
 
-**Conexión con el diseño del problema.** Tres decisiones de diseño explican gran parte del éxito:
-- La **recompensa densa** (`±1` por cada punto) da señal frecuente para la retropropagación. En Montezuma's Revenge, con recompensas escasas, DQN no aprende nada sin exploración inteligente adicional.
-- El **frame stacking de 4** transformó un problema no-Markov (un solo frame no basta) en un problema Markov (con 4 frames se recupera velocidad y aceleración).
-- El **preprocesamiento agresivo** (grayscale 84×84) redujo la entrada de 100 800 a 28 224 valores por observación, haciendo que la convolución fuera factible en presupuesto de laboratorio.
+**Sobre el 85% de éxito en evaluación (17/20):** los tres fracasos comparten condiciones iniciales adversas. Con más entrenamiento — o con Double DQN, que reduce la sobreestimación de Q — probablemente ese porcentaje sube al 95%+. Pero para el propósito del taller, 17/20 con retorno medio +233 (bien por encima del umbral +200) constituye evidencia sólida de que el aprendizaje fue exitoso.
 
-## 10. Dificultades encontradas
+**Limitación estructural 1: la política es específica del ambiente.** El agente entrenado sobre LunarLander no puede pilotar otro vehículo — la red aprendió qué acciones producen qué transiciones en *este* Box2D con *esta* gravedad. No aprendió "física de aterrizaje" en abstracto.
+
+**Limitación estructural 2: DQN sobreestima Q.** Es un resultado teórico bien documentado (van Hasselt et al., 2016): el operador `max` en el target sesga los Q hacia arriba. Se ve indirectamente en la curva — los Q aprendidos son sistemáticamente más altos que los retornos reales que se logran. Double DQN corrige esto separando la selección y evaluación de la acción; en un trabajo posterior valdría la pena probarlo aquí.
+
+**Limitación estructural 3: sin garantías de convergencia.** DQN no tiene garantías teóricas de converger a la política óptima. En esta corrida convergió limpiamente porque los hiperparámetros eran razonables, pero corriendo con semillas distintas la curva puede tener plateaus más largos o quedarse atascada. La primera corrida completa que se hizo para este taller (sobre Pong, con hiperparámetros similares) es un ejemplo de esa varianza.
+
+**Conexión con el diseño del problema.** Tres decisiones estructurales del ambiente explican gran parte del éxito:
+
+- La **recompensa densa y multicomponente** da señal frecuente para la retropropagación. Con recompensa escasa (como en Pong o Montezuma) el mismo algoritmo no aprendería en el mismo presupuesto de cómputo.
+- El **estado ya Markov** (posición + velocidad + ángulo) elimina la necesidad de frame stacking o recurrencia. Es una simplificación estructural que reduce enormemente la dificultad del problema.
+- La **terminación bien definida** (aterrizaje/crash como estados terminales reales) permite que la señal `terminated` funcione correctamente en Bellman. En ambientes donde la terminación es ambigua o solo por timeout, DQN aprende peor.
+
+## 9. Dificultades encontradas
 
 **Conceptuales:**
 
-1. **Distinguir `terminated` de `truncated` en el flujo de datos.** No es obvio al principio que solo el primero debe entrar al buffer como "done" para la ecuación de Bellman. Poner `terminated or truncated` inflaría el número de "estados terminales" ficticios y llevaría a la red a subestimar sistemáticamente los Q-valores hacia el final de los episodios. Ese error es silencioso — el entrenamiento converge pero a una política peor.
+1. **Distinguir `terminated` de `truncated`.** Ya lo había visto en el Taller 1, pero aquí adquirió una nueva dimensión: LunarLander sí tiene truncamiento genuino a 1000 pasos, mientras que en MountainCar y Pong casi nunca se activa. Confirmar que solo `terminated` entra al buffer como "done" fue crítico — meter el truncamiento inflaría la señal de "estado terminal" y llevaría a subestimar Q en los estados finales de episodios largos.
 
-2. **Por qué hay dos redes.** La intuición de "target network" no es evidente hasta que se ve el fallo sin ella: al usar la misma red para calcular el target y actualizar los pesos, el objetivo se mueve con cada gradiente, y el aprendizaje diverge. La red target congelada rompe ese ciclo. La sincronización periódica es el compromiso entre no cambiar nunca (target obsoleto, mal aprendizaje) y cambiar cada paso (inestabilidad).
+2. **Elección de ambiente con presupuesto de cómputo real.** El primer intento sobre Pong (Atari con CNN Nature) reveló que la elección de ambiente no es solo pedagógica — es una restricción operativa. DQN vanilla sobre Atari necesita al menos 5M pasos según el paper original de DeepMind, y en Colab gratuito eso no es factible en una sesión. Aprender a calibrar la complejidad del ambiente contra el presupuesto de cómputo fue una lección concreta.
 
-3. **Por qué apilar frames en vez de usar velocidad como feature.** En un ambiente con estado estructurado (posición, velocidad) uno pasaría ambos como observación. En Atari solo hay píxeles, y el problema no es Markov con un solo frame. Frame stacking es la manera práctica de recuperar la propiedad de Markov sin conocer las variables de estado subyacentes.
+3. **La curva "retorno vs ε en el tiempo" es más informativa que la curva de retornos sola.** Superponer las dos permite ver por qué el aprendizaje "despega" en un punto específico — es cuando ε cae lo suficiente como para que la política empiece a explotar en serio.
 
 **Técnicas:**
 
-1. **Memoria del replay buffer.** Almacenar el buffer en `float32` normalizado consumiría 22 GB, que no cabe en Colab. La solución fue guardarlo en `uint8` (5.6 GB) y normalizar dentro del forward de la red. Hay que asegurarse de que la conversión `uint8 → float32 / 255` ocurra en el device correcto (GPU si está disponible) y que las capas de convolución acepten ambos dtypes.
+1. **Conflicto de versiones de NumPy en Colab.** La primera ejecución del notebook LunarLander falló con `numpy.dtype size changed, may indicate binary incompatibility` porque la instancia de Python en Colab había cargado una versión de NumPy antes del `pip install "numpy<2"`. La solución fue reiniciar el runtime (`Runtime → Restart session`) para que Python cargara limpio.
 
-2. **Forma de tensores en el Bellman step.** `current_q` sale de `gather(1, actions.unsqueeze(1))` con forma `(batch, 1)`, mientras que `next_q.max(dim=1).values` sale como `(batch,)`. Sumar con broadcasting silencioso puede producir un tensor `(batch, batch)` que "entrena" pero sin sentido. El código incluye chequeos explícitos con `.squeeze(1)` para forzar formas consistentes.
+2. **Convergencia frágil de DQN vanilla.** El primer entrenamiento completo sobre LunarLander converge sin problemas con semilla 0 e hiperparámetros bien elegidos. Con hiperparámetros más agresivos o semilla desafortunada, la corrida podría no converger. DQN no es tan robusto como uno pensaría al leer el paper — la impresión de que "solo funciona" es específica de configuraciones bien afinadas.
 
-3. **Sesiones de Colab que se cortan.** Colab gratuito puede terminar sesiones de GPU después de varias horas o por inactividad. La solución fue guardar checkpoints cada 100 000 pasos, permitiendo reanudar desde el último buen estado si la sesión muere a mitad del entrenamiento.
+3. **El notebook autónomo vs. el código modular.** El notebook `lunarlander_dqn_colab.ipynb` contiene todo el código inline para que sea autocontenido en Colab. La carpeta `src/lunarlander_dqn/` tiene la misma lógica en módulos separados para uso local o extensión. Mantener las dos versiones consistentes requiere disciplina — cualquier cambio en la lógica debe reflejarse en ambos lados.
 
-4. **Ritmo lento en CPU para desarrollo local.** Un smoke test en CPU corre a ~150 pasos/segundo, muy lento para depurar cambios que necesitan miles de pasos para verificarse. Se resolvió haciendo tests de plumbing con `total_steps=300` y `replay_start=100` — suficiente para verificar que las formas y el flujo son correctos sin esperar horas.
+4. **Sesiones de Colab que se cortan.** Colab gratuito puede terminar sesiones GPU después de varias horas o por inactividad. La solución fue montar Google Drive al inicio y hacer que todos los checkpoints y métricas se guardaran en `MyDrive/lunarlander_dqn/`, no en el sistema de archivos efímero de Colab. Con esto, aunque la sesión muera, el estado del entrenamiento persiste.
 
-5. **Instalación de ROMs de Atari en Colab.** Requiere `ale-py` y las ROMs empaquetadas. Con `pip install "gymnasium[atari]"` se resuelve automáticamente en las versiones actuales; en versiones anteriores había que descargar ROMs manualmente y aceptar términos de licencia. El notebook usa la instalación moderna.
-
-## 11. Cómo reproducir
+## 10. Cómo reproducir
 
 ### En Google Colab (recomendado)
 
-1. Abrir el notebook: [`notebooks/pong_dqn_colab.ipynb`](notebooks/pong_dqn_colab.ipynb) en Colab.
-2. **Runtime → Change runtime type → T4 GPU**.
-3. Ejecutar todas las celdas en orden. Tiempo aproximado: 1.5–2 horas.
-4. Al final del notebook se descargan automáticamente: el modelo entrenado (`pong_dqn_final.pt`), la historia de recompensas (`history.npz`), los resultados de evaluación (`eval_results.npz`), la curva de aprendizaje (`pong_learning_curve.png`) y un video del agente jugando (`pong_gameplay.mp4`).
+1. Abrir el notebook `notebooks/lunarlander_dqn_colab.ipynb` en Colab.
+2. **Runtime → Change runtime type → T4 GPU** (funciona también en CPU pero ~3× más lento).
+3. Ejecutar las celdas 1 a 12 en orden. Duración total: ~15 minutos incluyendo evaluación y grabación de video.
+4. Los artefactos quedan tanto en Google Drive (`MyDrive/lunarlander_dqn/`) como se descargan al computador local en la última celda.
 
 ### Localmente
 
 ```bash
 pip install -r requirements.txt
 
-# Entrenar (~4 horas en CPU, ~1 hora en GPU)
+# Entrenar (~13 min en GPU, ~40 min en CPU)
 python -c "
-from atari_dqn import train, DQNConfig
+from lunarlander_dqn import train, DQNConfig
 cfg = DQNConfig()
-train(cfg, total_steps=1_500_000)
+train(cfg, total_steps=300_000)
 "
 
 # Evaluar
 python -c "
-from atari_dqn import evaluate_from_checkpoint
-print(evaluate_from_checkpoint('saves/pong_dqn_final.pt', n_episodes=10))
+from lunarlander_dqn import evaluate_from_checkpoint
+print(evaluate_from_checkpoint('saves/lunarlander_dqn_final.pt', n_episodes=20))
 "
 ```
 
-## 12. Referencias
+## 11. Referencias
 
 - Mnih, V., Kavukcuoglu, K., Silver, D., Rusu, A. A., Veness, J., Bellemare, M. G., ... & Hassabis, D. (2015). Human-level control through deep reinforcement learning. *Nature, 518*(7540), 529–533. <https://doi.org/10.1038/nature14236>
-- Mnih, V., Kavukcuoglu, K., Silver, D., Graves, A., Antonoglou, I., Wierstra, D., & Riedmiller, M. (2013). Playing Atari with Deep Reinforcement Learning. *arXiv preprint arXiv:1312.5602*.
+- van Hasselt, H., Guez, A., & Silver, D. (2016). Deep Reinforcement Learning with Double Q-Learning. *Proceedings of AAAI 2016*. <https://arxiv.org/abs/1509.06461>
 - Sutton, R. S., & Barto, A. G. (2018). *Reinforcement learning: An introduction* (2nd ed., cap. 6, 16). MIT Press.
-- Bellemare, M. G., Naddaf, Y., Veness, J., & Bowling, M. (2013). The Arcade Learning Environment: An evaluation platform for general agents. *Journal of Artificial Intelligence Research, 47*, 253–279.
-- Gymnasium documentation — Atari environments. <https://gymnasium.farama.org/environments/atari/pong/>
-- Repositorio ale-py (Arcade Learning Environment Python bindings). <https://github.com/Farama-Foundation/Arcade-Learning-Environment>
+- Gymnasium documentation — LunarLander. <https://gymnasium.farama.org/environments/box2d/lunar_lander/>
+- Brockman, G., Cheung, V., Pettersson, L., Schneider, J., Schulman, J., Tang, J., & Zaremba, W. (2016). OpenAI Gym. *arXiv preprint arXiv:1606.01540*.
