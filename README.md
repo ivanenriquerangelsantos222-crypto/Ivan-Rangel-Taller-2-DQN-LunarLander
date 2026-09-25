@@ -1,4 +1,4 @@
-# Taller 2 — DQN sobre LunarLander-v3
+# Taller 2 — DQN sobre LunarLander-v3 kikitooo
 
 **Simulación y Aprendizaje por Refuerzo** — Maestría en Inteligencia Artificial, Universidad de La Sabana.
 Autor: Ivan Enrique Rangel Santos.
