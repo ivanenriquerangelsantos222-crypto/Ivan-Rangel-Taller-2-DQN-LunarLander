@@ -1,24 +1,26 @@
-# Taller 2 — DQN sobre LunarLander-v3 kikitooo
+# Taller 2 — DQN sobre LunarLander v3
 
-**Simulación y Aprendizaje por Refuerzo** — Maestría en Inteligencia Artificial, Universidad de La Sabana.
+**Simulación y Aprendizaje por Refuerzo** Maestría en Inteligencia Artificial, Universidad de La Sabana.
 Autor: Ivan Enrique Rangel Santos.
 
-Implementación desde cero de un agente **Deep Q-Network** para resolver `LunarLander-v3`, un ambiente de Gymnasium no trabajado previamente en clase. El proyecto abarca el diseño del MLP que aproxima la función Q, la implementación del replay buffer y la red target, el entrenamiento hasta cruzar el umbral oficial de "resuelto" (+200 de retorno medio en 100 episodios consecutivos) y la evaluación con política voraz sobre 20 episodios de semilla nueva. Se documentan el ambiente, las decisiones de arquitectura, los resultados obtenidos y las dificultades técnicas encontradas.
+En este proyecto desarrollé desde cero un agente Deep Q-Network (DQN) para resolver el entorno LunarLander-v3 de Gymnasium. Durante el desarrollo implementé la red neuronal tipo MLP para aproximar la función Q, el replay buffer y la red target, que son componentes importantes para que el agente pueda aprender de las experiencias obtenidas durante el entrenamiento.
+
+El objetivo fue entrenar el agente hasta alcanzar el criterio establecido para considerar el entorno como resuelto, es decir, obtener un retorno promedio superior a +200 durante 100 episodios consecutivos. Después de lograrlo, evalué el comportamiento del agente utilizando una política voraz en 20 episodios con nuevas semillas, para comprobar cómo respondía ante situaciones diferentes a las utilizadas durante el entrenamiento.
+
+También documenté las características principales del entorno, las decisiones que tomé para definir la arquitectura de la red y los parámetros utilizados durante el entrenamiento. Finalmente, incluí los resultados obtenidos y las principales dificultades técnicas que encontré durante la implementación, junto con la forma en que fui solucionándolas.
 
 ## Nota sobre el ambiente elegido
 
-Este taller comenzó con `ALE/Pong-v5` (Atari) como ambiente objetivo, siguiendo el interés natural por trabajar con imágenes y una CNN al estilo Nature 2015. Después de dos corridas completas de entrenamiento en Google Colab (unas 3 horas de cómputo entre ambas) el DQN vanilla no logró converger — un resultado consistente con la literatura, que reporta que DQN sin variantes (Double, Dueling, distributional) requiere típicamente 5-10 millones de pasos de entorno para converger en Pong. Con el presupuesto de sesión de Colab gratuito eso queda fuera de alcance para un taller académico.
+El taller inicialmente lo planteé utilizando ALE/Pong-v5 de Atari, porque me parecía interesante trabajar con imágenes y aplicar una CNN siguiendo el enfoque presentado en Nature en 2015. Sin embargo, después de realizar dos entrenamientos completos en Google Colab, que representaron aproximadamente 3 horas de tiempo de cómputo entre las dos pruebas, observé que el DQN vanilla no lograba converger.
 
 La decisión fue cambiar a **LunarLander-v3**, un ambiente:
 
-- **No visto en clase** (cumple el requisito del enunciado).
 - **Abordable con DQN vanilla** en presupuesto de laboratorio.
 - **Rico conceptualmente**: 8 componentes de estado, recompensa densa con múltiples términos, terminación mixta (aterrizaje/crash/timeout).
-- **Con historial documentado** de convergencia limpia — es el "hello world" del DRL sobre problemas de control con estado vectorial.
+- **Con historial documentado** de convergencia limpia  es el "hello world" del DRL sobre problemas de control con estado vectorial.
 
-El resultado justifica el cambio: **el agente cruzó el umbral oficial de "resuelto" en el step 238 000** (~13 minutos de entrenamiento en T4).
-
-## Contenido del repo
+El resultado confirmó que el cambio de entorno fue una buena decisión, ya que el agente logró superar el umbral oficial de “resuelto” en el step 238.000, después de aproximadamente 13 minutos de entrenamiento utilizando una GPU T4.
+## Contenido del ejercicio
 
 ```
 ├── src/lunarlander_dqn/
@@ -46,9 +48,11 @@ El resultado justifica el cambio: **el agente cruzó el umbral oficial de "resue
 
 ## 1. Descripción del ambiente
 
-**LunarLander-v3** simula el problema clásico de aterrizar un módulo lunar en un pad marcado entre dos banderas. El agente controla cuatro motores discretos y debe descender del cielo hasta posarse suavemente sobre las patas, sin estrellarse, sin gastar más combustible del necesario y sin desviarse del pad. El ambiente usa Box2D como motor físico, así que las trayectorias son deterministas dado el estado y la acción, pero las condiciones iniciales varían por semilla (posición horizontal inicial, viento moderado).
+**LunarLander-v3** El ambiente simula el problema clásico de aterrizar un módulo lunar en un punto específico ubicado entre dos banderas. El agente tiene el control de cuatro acciones relacionadas con los motores y debe lograr que el módulo descienda y aterrice suavemente sobre las patas, evitando estrellarse, tratando de no gastar combustible innecesariamente y manteniéndose dentro de la zona de aterrizaje.
 
-Elegí este ambiente por tres razones concretas: (1) es más complejo que el clásico CartPole pero factible con DQN vanilla; (2) tiene un umbral oficial de "resuelto" (+200 de retorno medio en 100 episodios consecutivos), lo que da un criterio objetivo de éxito; (3) su recompensa es densa y compuesta por varios términos, lo que abre un análisis rico sobre trade-offs en la política aprendida.
+Para simular la dinámica del módulo se utiliza Box2D como motor físico. Esto significa que, dadas las mismas condiciones iniciales, el comportamiento del ambiente es determinista frente a las acciones que toma el agente. Sin embargo, las condiciones iniciales pueden cambiar dependiendo de la semilla utilizada, por ejemplo, la posición horizontal inicial y la presencia de un viento moderado.
+
+Elegí este ambiente principalmente por tres razones. Primero, porque representa un reto mayor que un ambiente sencillo como CartPole, pero todavía es posible abordarlo utilizando un DQN vanilla. Segundo, porque cuenta con un criterio oficial para determinar cuándo el agente ha logrado resolver el problema: alcanzar un retorno medio de +200 durante 100 episodios consecutivos. Esto permite tener una medida clara y objetiva del desempeño. Finalmente, la función de recompensa es relativamente densa y está compuesta por diferentes elementos, lo que permite analizar con mayor detalle cómo el agente aprende a tomar decisiones y los diferentes compromisos que aparecen en la política aprendida.
 
 ## 2. Espacios de acciones y observaciones
 
@@ -61,9 +65,11 @@ Elegí este ambiente por tres razones concretas: (1) es más complejo que el cl�
 | Componentes | posición x, posición y, velocidad vx, velocidad vy, ángulo, velocidad angular ω, contacto pata izquierda ∈ {0,1}, contacto pata derecha ∈ {0,1} |
 | Rangos típicos | x ∈ [-1.5, 1.5], y ∈ [0, 1.5], velocidades ∈ [-5, 5], ángulo ∈ [-π, π] |
 
-Las 8 componentes cubren todo el estado dinámico relevante del módulo. **Es Markov por construcción** — no hace falta apilar frames como en Atari, porque la velocidad ya está incluida explícitamente en el estado. Esta es una diferencia estructural con el proyecto original de Pong: sin necesidad de recuperar la propiedad de Markov desde píxeles, el problema se vuelve considerablemente más tratable.
+Las 8 variables del estado contienen la información que necesitamos para saber cómo se encuentra el módulo en cada momento. Una ventaja de este ambiente es que el estado ya tiene incluida la información sobre la posición y la velocidad del módulo, por lo que cumple con la propiedad de Markov. Esto hace que no sea necesario guardar varias imágenes o juntar diferentes frames, como sí ocurre en Atari. En este caso, la velocidad ya está disponible directamente como parte del estado y el agente puede utilizarla para tomar la siguiente decisión.
 
-**Preprocesamiento aplicado:** ninguno. Las 8 componentes se pasan directo a la red. No se normalizan porque los rangos son moderados y una capa lineal se adapta a la escala durante entrenamiento. Se experimentó brevemente sin normalización y funcionó de una vez; probé una versión con estandarización online y no dio mejora clara, así que se dejó fuera para no agregar complejidad injustificada.
+Esta fue una diferencia importante frente al proyecto inicial con Pong, porque allí teníamos que obtener la información a partir de las imágenes. En LunarLander-v3, al tener directamente las variables que describen el estado del módulo, el problema se vuelve mucho más sencillo de trabajar con un DQN vanilla
+
+**Preprocesamiento aplicado:** ninguno. Las 8 variables del estado se pasan directamente a la red neuronal. En este caso decidí no hacer una normalización, principalmente porque los valores están dentro de rangos moderados y la propia red puede ir ajustando las diferentes escalas durante el entrenamiento. Hice una prueba rápida sin normalizar y el agente funcionó desde el comienzo. También probé una versión utilizando estandarización online, pero no encontré una mejora clara en los resultados. Por eso preferí dejar esta parte por fuera y mantener el modelo más sencillo, evitando agregar una complejidad que no estaba aportando un beneficio evidente.
 
 ### Acciones
 
@@ -78,7 +84,7 @@ Espacio discreto de 4 acciones — cabe perfecto para DQN, que en su forma clás
 
 ## 3. Sistema de recompensas y terminación
 
-La recompensa es **densa** y se compone de varios términos que se acumulan a lo largo del episodio:
+La recompensa que utiliza el ambiente es densa, es decir, el agente va recibiendo diferentes recompensas o penalizaciones durante el episodio, y estas se van acumulando hasta llegar al resultado final.
 
 | Fuente | Valor | Frecuencia |
 |---|---:|---|
@@ -91,13 +97,13 @@ La recompensa es **densa** y se compone de varios términos que se acumulan a lo
 
 **Umbral oficial de resuelto:** retorno medio de **+200** en 100 episodios consecutivos.
 
-**Terminación:** un episodio termina cuando (a) el módulo aterriza — patas en el suelo con velocidad reducida, `terminated=True`; (b) el módulo se estrella o sale del área — `terminated=True`; o (c) se cumplen 1000 pasos sin resolver — `truncated=True`. Como siempre, **solo `terminated` colapsa el bootstrap** en la ecuación de Bellman; `truncated` conserva el estado con valor futuro definido.
+**Terminación:** un episodio termina cuando (a) el módulo aterriza con las patas en el suelo con velocidad reducida, `terminated=True`; (b) el módulo se estrella o sale del área  `terminated=True`; o (c) se cumplen 1000 pasos sin resolver `truncated=True`. Como siempre, **solo `terminated` colapsa el bootstrap** en la ecuación de Bellman; `truncated` conserva el estado con valor futuro definido.
 
-La recompensa densa es la característica que hace tratable el problema. En Pong (donde el agente solo recibe señal al anotar) o Montezuma's Revenge (donde la señal aparece cada varios minutos) la exploración se vuelve un problema en sí mismo. Aquí, cada frame produce señal — el gradiente por distancia al pad guía al agente incluso antes de que haya tocado el suelo por primera vez.
+Para mí, una de las características más importantes de este ambiente es que la recompensa es densa, porque esto hace que el problema sea mucho más manejable para el agente. A diferencia de juegos como Pong, donde la recompensa aparece principalmente cuando se anota un punto, o Montezuma's Revenge, donde pueden pasar bastante tiempo sin recibir una señal clara, en LunarLander-v3 el agente recibe información de recompensa constantemente. Esto le permite saber si se está acercando o alejando del objetivo y ajustar sus acciones incluso antes de lograr el primer aterrizaje. Por ejemplo, la distancia al punto de aterrizaje le da una señal que ayuda al agente a aprender desde las primeras etapas del entrenamiento.
 
 ## 4. Ciclo de entrenamiento DQN
 
-El diagrama que sigue captura los tres elementos que hacen que DQN funcione — **replay buffer**, **target network** y **actualización de Bellman** — y cómo se conectan con el ciclo de interacción con el ambiente.
+El diagrama que sigue captura los tres elementos que hacen que DQN funcione  **replay buffer**, **target network** y **actualización de Bellman**  y cómo se conectan con el ciclo de interacción con el ambiente.
 
 ![Ciclo de entrenamiento DQN](figures/dqn_cycle_diagram.png)
 
@@ -209,15 +215,17 @@ Los tres episodios con retorno bajo (58.3, 124.4, -33.7) comparten un patrón: c
 2. **Frenado**: cerca del suelo, dispara el motor principal en pulsos cortos para reducir la velocidad vertical.
 3. **Contacto**: minimiza el uso del motor principal justo antes del contacto para no gastar combustible innecesario.
 
-Ese comportamiento no fue programado; emergió del entrenamiento. Es exactamente el tipo de política que un piloto humano desarrollaría, descubierta desde cero a partir del vector de 8 floats y una señal escalar de recompensa.
+Este comportamiento no se programó directamente en el agente, sino que apareció como resultado del entrenamiento. Lo interesante es que, a partir de las 8 variables del estado y de la señal de recompensa, el agente fue aprendiendo por sí solo una estrategia de control que se parece bastante a la forma en que una persona intentaría aterrizar el módulo.En otras palabras, no le indiqué paso a paso qué debía hacer. El agente fue descubriendo la política durante el entrenamiento, ajustando sus acciones según las experiencias que iba acumulando.
 
 **Sobre el 85% de éxito en evaluación (17/20):** los tres fracasos comparten condiciones iniciales adversas. Con más entrenamiento — o con Double DQN, que reduce la sobreestimación de Q — probablemente ese porcentaje sube al 95%+. Pero para el propósito del taller, 17/20 con retorno medio +233 (bien por encima del umbral +200) constituye evidencia sólida de que el aprendizaje fue exitoso.
 
-**Limitación estructural 1: la política es específica del ambiente.** El agente entrenado sobre LunarLander no puede pilotar otro vehículo — la red aprendió qué acciones producen qué transiciones en *este* Box2D con *esta* gravedad. No aprendió "física de aterrizaje" en abstracto.
+**Limitación estructural 1: la política es específica del ambiente.** El agente entrenado sobre LunarLander no puede pilotar otro vehículo, la red aprendió qué acciones producen qué transiciones en *este* Box2D con *esta* gravedad. No aprendió "física de aterrizaje" en abstracto.
 
 **Limitación estructural 2: DQN sobreestima Q.** Es un resultado teórico bien documentado (van Hasselt et al., 2016): el operador `max` en el target sesga los Q hacia arriba. Se ve indirectamente en la curva — los Q aprendidos son sistemáticamente más altos que los retornos reales que se logran. Double DQN corrige esto separando la selección y evaluación de la acción; en un trabajo posterior valdría la pena probarlo aquí.
 
-**Limitación estructural 3: sin garantías de convergencia.** DQN no tiene garantías teóricas de converger a la política óptima. En esta corrida convergió limpiamente porque los hiperparámetros eran razonables, pero corriendo con semillas distintas la curva puede tener plateaus más largos o quedarse atascada. La primera corrida completa que se hizo para este taller (sobre Pong, con hiperparámetros similares) es un ejemplo de esa varianza.
+**Limitación estructural 3: sin garantías de convergencia.** Es importante tener en cuenta que DQN no garantiza teóricamente que siempre vaya a encontrar la política óptima. En esta prueba el entrenamiento tuvo una buena evolución y logró converger, probablemente porque los hiperparámetros utilizados eran adecuados para el problema. Sin embargo, esto no significa que siempre vaya a ocurrir lo mismo. Si se cambia la semilla de entrenamiento, la curva puede comportarse de manera diferente: puede presentar períodos más largos sin mejorar o incluso quedarse estancada durante parte del entrenamiento.
+
+La primera prueba que realicé para este taller, utilizando Pong y unos hiperparámetros similares, es un buen ejemplo de esta variabilidad. Aunque el procedimiento era el mismo, el agente no logró converger dentro del tiempo disponible. Esto muestra que en aprendizaje por refuerzo los resultados pueden depender bastante de las condiciones iniciales y de la configuración utilizada.
 
 **Conexión con el diseño del problema.** Tres decisiones estructurales del ambiente explican gran parte del éxito:
 
@@ -229,7 +237,9 @@ Ese comportamiento no fue programado; emergió del entrenamiento. Es exactamente
 
 **Conceptuales:**
 
-1. **Distinguir `terminated` de `truncated`.** Ya lo había visto en el Taller 1, pero aquí adquirió una nueva dimensión: LunarLander sí tiene truncamiento genuino a 1000 pasos, mientras que en MountainCar y Pong casi nunca se activa. Confirmar que solo `terminated` entra al buffer como "done" fue crítico — meter el truncamiento inflaría la señal de "estado terminal" y llevaría a subestimar Q en los estados finales de episodios largos.
+1. **Distinguir `terminated` de `truncated`.** ste tema ya lo había visto en el Taller 1, pero en este caso tomó más importancia. En LunarLander-v3 sí se puede presentar un truncamiento real al llegar a los 1000 pasos, algo que en MountainCar y Pong casi nunca ocurre.
+
+Por eso fue importante revisar que solamente terminated se tomara como “done” al guardar la experiencia en el buffer. Si también hubiera tomado el truncamiento como un estado terminal, el agente podría interpretar que el episodio terminó realmente cuando en realidad simplemente llegó al límite de pasos. Esto podría generar una señal incorrecta y hacer que se subestimaran los valores Q en los estados finales de los episodios más largos.
 
 2. **Elección de ambiente con presupuesto de cómputo real.** El primer intento sobre Pong (Atari con CNN Nature) reveló que la elección de ambiente no es solo pedagógica — es una restricción operativa. DQN vanilla sobre Atari necesita al menos 5M pasos según el paper original de DeepMind, y en Colab gratuito eso no es factible en una sesión. Aprender a calibrar la complejidad del ambiente contra el presupuesto de cómputo fue una lección concreta.
 
